@@ -1,0 +1,27 @@
+#!/usr/bin/env perl
+
+my $mode = 0;
+my $seq = '';
+my $qual = '';
+
+while (my $line = <>) {
+  chomp $line;
+  my $c = substr($line,0,1);
+  if ($c eq '@' and length($qual) == length($seq) ) {
+    print ">", substr($line,1), "\n";
+    $mode = 1;
+    $seq = '';
+    $qual = '';
+  }
+  elsif ($c eq '+' and $mode==1) {
+    print $seq, "\n";
+    $mode = 2;
+  }
+  elsif ($mode == 1) {
+    $seq .= $line;
+  }
+  elsif ($mode == 2) {
+    $qual .= $line;
+  }
+  
+}
