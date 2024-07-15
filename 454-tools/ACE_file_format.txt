@@ -1,0 +1,30 @@
+ACE FILE FORMAT
+
+Summarized format of the ace file. For detailed info, see the consed(1) man
+page, about page 37
+
+ AS <number of contigs> <total number of reads in ace file>
+ CO <contig name> <#bases> <#reads>  <#base segments> <U or C> 
+ lines of sequence data
+
+ BQ
+ lines of sequence quality data
+
+ AF <read name> <C or U> <padded start consensus position>
+ BS <start position> <end position> <read name>
+
+ RD <read name> <# of padded bases> <# of read  info items> <# of read tags>
+ QA <start> <end> <align start> <align end>
+
+ DS CHROMAT_FILE: <name > PHD_FILE:  <name > TIME: <date/time phd file>
+ WR { <tag type> <program >  <YYMMDD:HHMMSS> }
+ RT{ <tag type> <program > < start>  <end> <YYMMDD:HHMMSS> }
+ CT{ <contig name> <tag  type>  <program> <start> <end> <YYMMDD>  (info) }
+ WA{ <tag type> <program> <YYMMDD:HHMMSS> 1 or more lines of data }
+
+
+CO segments mark the beginning of a contig description.
+There will be one BQ segment associated with each CO,
+and one or more AF, and RD segments associated with each CO.
+Contigimage only looks at CO, BQ, AF, and RD segments.
+
