@@ -1,0 +1,275 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Data::Dumper;
+#use Bio::SeqIO;
+use Bio::DB::Sam;
+#use Bio::DB::Sam::Constants;
+use List::Util qw(min max);
+
+use constant {
+  STRAND_NEG  => '<',
+  STRAND_POS  => '>',
+  BASE_INSERT => '^',
+  BASE_DELETE => '-',
+  BASE_SAME   => '.',
+  BASE_CLIP   => '_',
+};
+
+my(@Options, $verbose, $seqid, $start, $end, $width, $revcom, $bam_fn, $fa_fn, 
+             $consfreq, $unmask, $list, $nesoni);
+setOptions();
+
+if ($nesoni) {
+  $bam_fn = 'alignments_filtered_sorted.bam';
+  $fa_fn  = 'reference.fa';
+  if (-r $fa_fn and not -e "$fa_fn.fai") {
+    print STDERR "Indexing: $fa_fn\n";
+    system("samtools faidx $fa_fn");
+  }
+  if (-r $bam_fn and not -e "$bam_fn.bai") {
+    print STDERR "Indexing: $bam_fn\n";
+    system("samtools index $bam_fn");
+  }
+}
+
+-r $bam_fn or die "Please specify --bam <file.bam>";
+-r "$bam_fn.bai" or die "Can't find $bam_fn.bai index file, try: samtools index $bam_fn";
+-r $fa_fn or die "Please specify --fasta <file.fa>";
+-r "$fa_fn.fai" or die "Can't find $fa_fn.fai index file, try: samtools faidx $fa_fn";
+
+my $sam = Bio::DB::Sam->new(-bam=>$bam_fn, -fasta=>$fa_fn);
+my @targets = $sam->seq_ids;
+print STDERR "Targets: @targets\n" if $verbose;
+die "No sequence targets found in BAM file!" unless @targets;
+
+if ($list) {
+  for my $id (@targets) {
+    print $id, "\t", $sam->length($id), "\n";
+  }
+  exit;
+}
+
+$width -= 2; # remove one for our 1st column with < and >
+if ($end) {
+  $width = $end - $start + 1;
+}
+else {
+  $end = $start + $width - 1;
+}
+
+$seqid ||= $targets[0];
+print STDERR "Target: $seqid:$start..$end\n" if $verbose;
+
+my $seg = $sam->segment(-seq_id=>$seqid, -start=>$start, -end=>$end);
+print "",$seg->seq_id, ':', $seg->start, '..', $seg->end,"\n";
+#my $consensus = " ".$seg->dna."\n";
+my $consensus = $seg->dna."\n";
+print $consensus;
+
+my $row=0;
+my @row;
+for my $a ($seg->features) 
+{
+#  my $read = uc $a->query->dna;
+  my $read = tweaked_read($a);
+  my $L = length $read;
+  my $offset = $a->start - $start;
+
+  if ($verbose) {
+    print "# REF ", $a->start, " ",$a->end, " ", $a->strand; 
+    print " | READ ", $a->query->start, " ",$a->query->end, " ", $a->query->strand;
+    print " | OFFSET $offset";
+    print " | CIGAR ", $a->cigar_str;
+    print "\n";
+  }
+
+  # check for soft clipping on left and right (ie. unaligned, but still in read)
+  if ($a->cigar_str =~ m/^(\d+)S/) {
+    substr $read, 0, $1, BASE_CLIP x $1; 
+    $offset = $offset - $1; # need to adjust true start of read now
+  }
+  if ($a->cigar_str =~ m/(\d+)S$/) {
+    $read .= BASE_CLIP x $1;
+  }
+
+  # adjust read if it starts before or after consensus start
+  if ($offset > 0) {
+    $read = " "x$offset . $read;
+  }
+  else {
+    $read = substr $read, -$offset;
+  }
+  
+  # ensure read fits in no. columns
+  $read = substr $read, 0, $width; 
+  
+  # change letters depending on match/mismatch
+  $read = mask_same($seg->dna, $read);
+  
+  # print it out
+#  my $strand = $a->strand < 0 ? STRAND_NEG : STRAND_POS;
+#  print $strand, $read, "\n"; #, " ", $a->cigar_str, "\n";
+  push @row, $read;
+  $row++;
+  
+  if ($consfreq and $row % $consfreq == 0) {
+    print $consensus;
+  }
+}
+
+
+my @packed = pack_reads(@row);
+
+for my $row (@packed) {
+  print "$row\n";
+}
+
+#----------------------------------------------------------------------
+
+sub pack_reads {
+  my(@r) = @_;
+
+  @r = sort { length($a) <=> length($b) } @r;
+  
+  my @offset;
+  my @len;
+  my @read;
+  for my $r (@r) {
+    $r =~ m/^(\s*)(\S+)/;  # REMOVES ^ SUFFIX!!!
+    push @offset, length($1 || '');
+    push @len, length($2);
+    push @read, $2;
+  }  
+  print Dumper(\@offset, \@len, \@read) if $verbose;
+  
+  
+for (1..10) {  
+  my $here = 0;
+  
+  while ($here < @r) {
+#    print "# h=$here rh=$r[$here]\n";
+#    for my $i ($here+1 .. $#r) {
+    for (my $i = $#r ; $i >= $here+1 ; $i--) {
+#      print "# i=$i oi=$offset[$i]\n";
+      if ( $offset[$i] > $len[$here] + 1 and $offset[$here]+$len[$here]+$len[$i]+1 <= $width) {
+#        print "# FOUND @ i=$i!\n";
+        $r[$here] .= " ".$read[$i];
+	$len[$here] += $len[$i] + 1;
+	$len[$i] = 1E11;
+	$offset[$i] = 1E11;
+	last;
+      }
+    }
+    $here++;
+  }
+}
+  
+  return @r;
+}
+
+#----------------------------------------------------------------------
+
+#op	Description
+#M	Alignment match (can be a sequence match or mismatch
+#I	Insertion to the reference
+#D	Deletion from the reference
+#N	Skipped region from the reference
+#S	Soft clip on the read (clipped sequence present in <seq>)
+#H	Hard clip on the read (clipped sequence NOT present in <seq>)
+#P	Padding (silent deletion from the padded reference sequence)
+
+sub tweaked_read {
+  my($a) = @_;  
+  my $read = uc $a->query->dna;
+  my $offset = 0;
+  my @ins;
+  
+  for my $p (@{$a->cigar_array}) {
+    my($op, $count) = @$p;
+    if ($op eq 'I') {
+      push @ins, substr($read, $offset, 2);
+      substr $read, $offset, 2, BASE_INSERT;
+    }
+    elsif ($op eq 'D') {
+      substr $read, $offset, 0, BASE_DELETE;
+    }
+    $offset += $count;
+  }
+  $read .= " | ".join('',map { BASE_INSERT.$_ } @ins) if @ins;
+  return $read;
+}
+
+
+#----------------------------------------------------------------------
+
+sub mask_same {
+  my($r, $s) = @_;
+  my $s2 = '';
+  for my $i (0 .. length($s)) {
+    my $b = substr($s,$i,1);
+    if (not $unmask) {
+      $s2 .= substr($r,$i,1) eq $b ? '.' : lc($b);
+    }
+    else {
+      $s2 .= substr($r,$i,1) eq $b ? lc($b) : uc($b);
+    }
+  }
+  return $s2;
+}
+
+#----------------------------------------------------------------------
+
+sub term_width {
+  my $w = $ENV{COLUMNS};
+  return $w if $w;
+  ($w) = qx(tput cols);
+  return $1 if $w =~ m/^(\d+)$/;
+  ($w) = qx(stty -a);
+  return $1 if $w =~ m/columns\s+(\d+);/;
+  return 80; # take a punt
+}
+
+#----------------------------------------------------------------------
+# Option setting routines
+
+sub setOptions {
+  use Getopt::Long;
+
+  @Options = (
+    {OPT=>"help",       VAR=>\&usage,             DESC=>"This help"},
+    {OPT=>"v|verbose!", VAR=>\$verbose, DEFAULT=>0, DESC=>"Verbose output"},
+    {OPT=>"n|nesoni!",  VAR=>\$nesoni,  DEFAULT=>0, DESC=>"Assume we are in a Nesoni folder (auto -b -f)"},
+    {OPT=>"b|bam=s",    VAR=>\$bam_fn,  DEFAULT=>'', DESC=>"Input BAM file (must have .bai index too)"},
+    {OPT=>"f|fasta=s",  VAR=>\$fa_fn,   DEFAULT=>'', DESC=>"Input FASTA file (must have .fai index too)"},
+    {OPT=>"i|seqid=s",  VAR=>\$seqid,   DEFAULT=>'', DESC=>"Sequence ID (will use first one found if not specified"},
+    {OPT=>"s|start=i",  VAR=>\$start,   DEFAULT=>1, DESC=>"Start of alignment to view"},
+    {OPT=>"e|end=i",    VAR=>\$end,     DEFAULT=>'', DESC=>"End of alignment to view (don't mix with --width)"},
+    {OPT=>"w|width=i",  VAR=>\$width,   DEFAULT=>term_width(), DESC=>"Width of alignment to view (don't mix with --end)"},
+    {OPT=>"c|consfreq=i",  VAR=>\$consfreq,  DEFAULT=>0, DESC=>"Print consensus every N lines (0=just at top)"},
+    {OPT=>"u|unmask!",  VAR=>\$unmask,  DEFAULT=>0, DESC=>"Show all bases, don't use '.' for same"},
+    {OPT=>"l|listseq!",  VAR=>\$list,  DEFAULT=>0, DESC=>"Just list all -seqid in the BAM"},
+  );
+
+  #(!@ARGV) && (usage());
+
+  &GetOptions(map {$_->{OPT}, $_->{VAR}} @Options) || usage();
+
+  # Now setup default values.
+  foreach (@Options) {
+    if (defined($_->{DEFAULT}) && !defined(${$_->{VAR}})) {
+      ${$_->{VAR}} = $_->{DEFAULT};
+    }
+  }
+}
+
+sub usage {
+  print "Usage: $0 [options]\n";
+  foreach (@Options) {
+    printf "  --%-13s %s%s.\n",$_->{OPT},$_->{DESC},
+           defined($_->{DEFAULT}) ? " (default '$_->{DEFAULT}')" : "";
+  }
+  exit(1);
+}
+ 
+#----------------------------------------------------------------------
