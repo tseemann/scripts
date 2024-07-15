@@ -1,0 +1,22 @@
+#!/bin/bash
+
+OPTS="-out=blast -ooc=/bio/sw/blat/11.ooc -noTrimA -extendThroughN"
+
+if [ $# -lt 2 ]; then
+  blat
+  echo "---------------------------------------------------------------"
+  echo
+  echo "Usage: blatt <database.fasta> <query.fasta> [blat -options]"
+  echo
+  echo "Default options: $OPTS"
+  echo
+  exit
+fi
+
+
+DB=$1
+shift
+QUERY=$1
+shift
+
+exec blat "$DB" "$QUERY" $OPTS $* /dev/stdout
