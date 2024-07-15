@@ -1,0 +1,90 @@
+#!/usr/bin/perl -w
+#       fa-run_SMP.pl
+#       
+#       Copyright 2010 Simon Gladman <gla048@boomer-wb>
+#       
+#       This program is free software; you can redistribute it and/or modify
+#       it under the terms of the GNU General Public License as published by
+#       the Free Software Foundation; either version 2 of the License, or
+#       (at your option) any later version.
+#       
+#       This program is distributed in the hope that it will be useful,
+#       but WITHOUT ANY WARRANTY; without even the implied warranty of
+#       MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#       GNU General Public License for more details.
+#       
+#       You should have received a copy of the GNU General Public License
+#       along with this program; if not, write to the Free Software
+#       Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+#       MA 02110-1301, USA.
+
+
+use strict;
+use Getopt::Long;
+use FindBin;
+use lib "$FindBin::Bin";
+use Data::Dumper;
+
+my(@Options, $verbose, $sep, $prefix);
+setOptions();
+
+my $infile = $ARGV[0];
+unless (-r $infile) { die "$infile not available for reading..\n $!"; }
+
+unless(open(IN, $infile)){ die "Couldn't open $infile for reading.. $!"; }
+
+my $count = 1;
+
+my $outfile = $prefix . $count . ".gbk";
+
+open(OUT, ">$outfile") or die "Couldn't open an ouput file..";
+
+while (<IN>) {
+    if(m/^\/\/\n/){
+        close OUT;
+        $count ++;
+        $outfile = $prefix . $count . ".gbk";
+        open (OUT, ">$outfile") or die "Couldn't open an ouput file..";
+        next;
+    }
+    print OUT $_;
+} 
+
+#----------------------------------------------------------------------
+# Option setting routines
+
+sub setOptions {
+	use Getopt::Long;
+
+	@Options = (
+		{OPT=>"help",    VAR=>\&usage,             DESC=>"This help"},
+		{OPT=>"v|verbose+", VAR=>\$verbose, DEFAULT=>0, DESC=>"Verbose"},
+		{OPT=>"s|sep=s", VAR=>\$sep, DEFAULT=>"//", DESC=>"The separator to look for.."},
+        {OPT=>"p|prefix=s", VAR=>\$prefix, DEFAULT=>"sequence_", DESC=>"The prefix to give the output files"},
+        
+	);
+
+	(@ARGV < 1) && (usage());
+
+	&GetOptions(map {$_->{OPT}, $_->{VAR}} @Options) || usage();
+
+	# Now setup default values.
+	foreach (@Options) {
+		if (defined($_->{DEFAULT}) && !defined(${$_->{VAR}})) {
+		${$_->{VAR}} = $_->{DEFAULT};
+		}
+	}
+}
+
+sub usage {
+	print "Usage: $0 [options] gbk_file.gb\n";
+	foreach (@Options) {
+		printf "  --%-13s %s%s.\n",$_->{OPT},$_->{DESC},
+			defined($_->{DEFAULT}) ? " (default '$_->{DEFAULT}')" : "";
+	}
+	
+	
+	exit(1);
+}
+ 
+#----------------------------------------------------------------------
